@@ -1,0 +1,505 @@
+---
+title: "13CO2_partitioning"
+author: "Greg McKittrick"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary library
+library(ggplot2)
+library(tidyverse)
+library(readxl)
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(pbkrtest)
+library(emmeans)
+```
+
+## Set output directory value
+
+```{r}
+# Get current date
+current_date <- Sys.Date()
+
+# Format date as yyyy-mm-dd
+date_string <- format(current_date, "%Y-%m-%d")
+
+# Create output folder path
+output_folder <- paste0("../Output/", date_string, "/")
+```
+
+## Read in Data
+
+```{r}
+# load in 13C data from GHG-IRMS
+C13Data <- read_excel("../GHG-IRMS/GHG-IRMS-All-Data.xlsx", sheet = 1)
+
+C13Data <- C13Data %>%
+  rename(CO2_delta_13C_VPDB = `CO2 δ¹³C (VPDB)`,
+         CO2_atom_percent_13C = `CO2 At% ¹³C (VPDB)`) #%>% 
+  #na.omit()
+
+# Convert variables to appropriate types
+C13Data$Jar <- as.factor(C13Data$Jar)
+C13Data$Rep <- as.factor(C13Data$Rep)
+#allData$Day <- as.factor(allData$Day)
+C13Data$Treatment <- as.factor(C13Data$Treatment)
+C13Data$Case <- paste(C13Data$Treatment, C13Data$Rep, sep = "_")
+C13Data$Case <- as.factor(C13Data$Case)
+str(C13Data)
+```
+
+## Filter out bad observations due to techinical issues (leaky lids)
+
+```{r}
+
+# Step 1: Filter out specific Case for days 14, and 17, 22, 30
+#once one has been removed, all measuremnt for that jar on subsequent days need to be removed because cumulative_ugCO2_C_gdried_soil will be falsely low at those points without consideration of the missing one before it
+#C13Data_filtered <- C13Data %>%
+  #filter(!(Day %in% c("14", "17", "22","30","37") & Case == "BSA_1"))
+
+# Step 1: Filter out specific Case for day 30
+#C13Data_filtered <- C13Data_filtered %>%
+  #filter(!(Day %in% c("30","37") & Case == "Ure2_2"))
+```
+
+## Filter out day 34 Substrate Induced Respiration
+
+```{r}
+#Filter out day 34 SIR from rest of daya
+C13Data_filtered <- C13Data %>%
+  filter(! Day == 34)
+
+#Create a seperate df for Day 34 SIR
+sirC13Data <- C13Data %>%
+  filter(Day == 34)
+```
+
+##Read in Setup details with substrate weights, substrate delta C13, and soil weight
+
+```{r}
+SetupDetails <- read_excel("../SetupDetails.xlsx", sheet = 1)
+
+SetupDetails$Jar <- as.factor(SetupDetails$Jar)
+SetupDetails <- SetupDetails %>%
+  rename(substrate_C_added_ug = `amount C-added (ug)`,
+         dried_soil_g = `dried soil (g)`,
+         delta_C13_substrates = `Delta C13 Substrates`)
+
+# Convert variables to appropriate types
+SetupDetails$Jar <- as.factor(SetupDetails$Jar)
+SetupDetails$Rep <- as.factor(SetupDetails$Rep)
+#allData$Day <- as.factor(allData$Day)
+SetupDetails$Treatment <- as.factor(SetupDetails$Treatment)
+```
+
+##Add set up details to C13Data_filtered
+
+```{r}
+C13Data_filtered <- C13Data_filtered %>% left_join(SetupDetails, by = "Jar", suffix = c("", "")) %>%
+  select(Jar, Case, Day, Rep, Treatment,CO2_delta_13C_VPDB, substrate_C_added_ug, delta_C13_substrates, dried_soil_g)
+```
+
+## Read in "cumulativeData_CO2_C.csv" from Cumulative_CO2_C.rmd
+
+```{r}
+cumulativeData_CO2_C <- read.csv(file = paste0 (output_folder, "cumulativeData_CO2_C.csv"))
+
+# Convert variables to appropriate types
+cumulativeData_CO2_C$Jar <- as.factor(cumulativeData_CO2_C$Jar)
+cumulativeData_CO2_C$Rep <- as.factor(cumulativeData_CO2_C$Rep)
+#allData$Day <- as.factor(allData$Day)
+cumulativeData_CO2_C$Treatment <- as.factor(cumulativeData_CO2_C$Treatment)
+cumulativeData_CO2_C$Case <- as.factor(cumulativeData_CO2_C$Case)
+cumulativeData_CO2_C$Day <- as.numeric(cumulativeData_CO2_C$Day)
+str(cumulativeData_CO2_C)
+```
+
+## Add cumulative CO2 data to C13_Data_filtered
+
+```{r}
+C13Data_filtered <- C13Data_filtered %>% 
+  left_join(cumulativeData_CO2_C, by = c("Treatment", "Day", "Rep", "Case", "Jar"), suffix = c("",""))%>%
+  select(Jar, Case, Day, Rep, Treatment,CO2_delta_13C_VPDB, substrate_C_added_ug, delta_C13_substrates, dried_soil_g, ugCO2_C_per_gdried_soil, cumulative_ugCO2_C_per_gdried_soil)
+```
+
+
+## Calculate daily soil-only average
+
+```{r}
+
+#Calculate daily soil only average delta 13C CO2
+daily_soil_only <- C13Data_filtered %>% 
+  filter(Treatment == "Soil Only") %>% 
+  group_by(Day) %>% 
+  summarise(daily_soil_only_mean_CO2_delta_13C_VPDB = mean(CO2_delta_13C_VPDB))
+
+#Calculate soil only average delta 13C CO2 from whole experiment
+all_soil_only <- C13Data_filtered %>% 
+  filter(Treatment == "Soil Only") %>% 
+  summarise(all_soil_only_mean_CO2_delta_13C_VPDB = mean(CO2_delta_13C_VPDB))
+
+# Merge daily_soil_only_mean into filtered_merged_data
+C13Data_filtered <- C13Data_filtered %>%
+  left_join(daily_soil_only, by = "Day")
+
+```
+
+## calculate proportion_substrate_respiration
+
+```{r}
+
+C13Data_filtered <- C13Data_filtered %>% 
+  mutate(proportion_substrate_respiration = ((CO2_delta_13C_VPDB - daily_soil_only_mean_CO2_delta_13C_VPDB)/(delta_C13_substrates - daily_soil_only_mean_CO2_delta_13C_VPDB)))
+
+#create a new column called final_proportion_substrate_respiration where if the value of prop_13C_respired is < 0, the final_prop_13C_respired becomes 0, or if the value of prop_13C_respired is > 1, the final_prop_13C_respired becomes 1, and if neither it just stays the same as prop_13C_respired
+C13Data_filtered <- C13Data_filtered %>%
+  mutate(final_proportion_substrate_respiration = case_when(
+    is.na(proportion_substrate_respiration) ~ 0,  # If prop_13C_respired is NA, set final_prop_13C_respired to 0, this is the case for soil only
+    proportion_substrate_respiration < 0 ~ 0,
+    proportion_substrate_respiration > 1 ~ 1,
+    TRUE ~ proportion_substrate_respiration
+  ))
+
+#write.csv(proportion_13C, "proportion_13C.csv")
+```
+
+## Calculate substrate respired (ugCO2-C /g dried soil) and soil respired (ugCO2-C /g dried soil)
+
+```{r}
+C13Data_filtered <- C13Data_filtered %>% 
+  mutate(respired_substrate_ugCO2_C_per_gdried_soil = final_proportion_substrate_respiration * ugCO2_C_per_gdried_soil,
+         soil_respired_ugCO2_C_per_gdried_soil = ugCO2_C_per_gdried_soil - respired_substrate_ugCO2_C_per_gdried_soil)
+```
+
+##Calculate C rates added (ugC/g dried soil) and 13C respired % then cumulative percent 13C repsired
+
+```{r,fig.show='plot}
+
+C13Data_filtered <- C13Data_filtered %>% 
+  mutate(ug_C_per_g_dried_soil = substrate_C_added_ug / dried_soil_g,
+         percent_substrate_respired = (respired_substrate_ugCO2_C_per_gdried_soil / ug_C_per_g_dried_soil )*100) %>% 
+  group_by(Treatment,Rep) %>% 
+  mutate(cumulative_percent_substrate_respired = cumsum(percent_substrate_respired)) %>% 
+  arrange(Treatment, Rep)
+
+#Save this final dataset and transformaitons as CSV
+
+write.csv(C13Data_filtered, paste0(output_folder, "13CO2_partitioning.csv"))
+```
+
+## Create a summary of 13CO2_partitioning.csv where reps are averaged
+
+```{r}
+summary_C13Data_filtered <- C13Data_filtered %>%
+  group_by(Treatment,Day) %>% 
+  summarize(n = n(),
+            avg_cumulative_percent_substrate_respired = mean(cumulative_percent_substrate_respired),
+         st_dev = sd(cumulative_percent_substrate_respired),
+            .groups = 'drop') %>% 
+  group_by(Treatment) %>%
+  mutate(cumulative_stdDev = sqrt(cumsum(st_dev^2))) %>% 
+  arrange(Treatment)
+
+
+#write this summary to a csv file
+
+write.csv(summary_C13Data_filtered, paste0(output_folder, "summary_13CO2_partitioning.csv"))
+```
+
+## Plot cumulative_percent_substrate_respired (no averaging of reps)
+
+```{r}
+# plot cumulative_percent_13C_respired
+
+p <- ggplot(C13Data_filtered, aes(x = Day, y = cumulative_percent_substrate_respired, color = Treatment)) +
+  geom_jitter(width = 0.2, alpha = 0.7, size = 1.5) +
+  #geom_errorbar(aes(ymin = cumulative_ugCO2_C_gdried_soil - cumulative_stdDev, ymax = cumulative_ugCO2_C_gdried_soil + cumulative_stdDev), width = 0.2) +
+  labs(x = "Days", y = "Percent", title = "Cumulative Percent Substrate Respired") +
+  theme_minimal()+
+  theme(
+    plot.title = element_text(size = 20),     # Title font size
+    axis.title.x = element_text(size = 15),   # X axis label font size
+    axis.title.y = element_text(size = 15)    # Y axis label font size
+  )
+
+
+p
+
+ggsave(file = paste0(output_folder,"Cumulative_Percent_Substrate_Respired.pdf"), plot = p)
+```
+
+
+## Plot the summary_cumulative_percent_substrate_respired (Reps averaged)
+
+```{r}
+p <- ggplot(summary_C13Data_filtered, aes(x = Day, y = avg_cumulative_percent_substrate_respired, color = Treatment)) +
+  geom_point(size = 0.8) +
+  geom_errorbar(aes(ymin = avg_cumulative_percent_substrate_respired - cumulative_stdDev, ymax = avg_cumulative_percent_substrate_respired + cumulative_stdDev), width = 0.1) +
+  geom_segment(aes(x = Day - 0.7, xend = Day + 0.7, y = avg_cumulative_percent_substrate_respired - cumulative_stdDev, yend = avg_cumulative_percent_substrate_respired - cumulative_stdDev, color = Treatment)) +
+  geom_segment(aes(x = Day - 0.7, xend = Day + 0.7, y = avg_cumulative_percent_substrate_respired + cumulative_stdDev, yend = avg_cumulative_percent_substrate_respired + cumulative_stdDev, color = Treatment)) +
+  labs(x = "Days", y = "Percent\n+/- cumulative sd", title = "Average Cumulative\nPercent Substrate respired") +
+  theme_minimal()
+
+
+
+p
+
+ggsave(file = paste0(output_folder,"Sumary_Cumulative_Percent_Substrate_Respired.pdf"), plot = p)
+```
+
+##Run a lmer model with cumulative_percent_13C_respired
+
+In summary, this model is investigating how the cumulative percent 13C respired is influenced by Treatment, Day, and their interaction, while accounting for the variability between different cases (Case) by including random intercepts.
+
+```{r}
+# Be sure to define time as.factor!!!
+
+cumulativeDataForModel <- C13Data_filtered %>%
+  mutate(Day = as.factor(Day))
+
+#Case takes 16 unique values corresponding to 16 jars!
+Model <- lmer(cumulative_percent_substrate_respired ~ Treatment*Day + (1|Case), data = cumulativeDataForModel)
+#Sample and Day are fixed effects
+#(1|Case) specifies case (or jar) as a random effect to account for repeated measures on the same jar over time.
+anova(Model)
+#ANOVA table to test for main effect and interaction.  This is a common starting point.
+
+# Run anova(Model) and capture the output
+anova_output <- capture.output(anova(Model))
+
+# Write the captured output to a text file
+writeLines(anova_output, con = paste0(output_folder, "13CO2_partitioning_aov_anova.txt"))
+
+plot(Model)
+#Diagnostic plots to check assumptions of normality and equal variance.
+#emmeans is VERY flexible!
+emmeans_results<-emmeans(Model, pairwise ~ Treatment|Day)
+emmeans_results
+#The code above will compare the means for the treatments, at EACH time point.
+
+# Capture the output of emmeans()
+emmeans_output <- capture.output(summary(emmeans_results))
+
+# Write the captured output to a text file
+writeLines(emmeans_output, con = paste0(output_folder, "13CO2_partitioning_aov_emmeans.txt"))
+
+```
+
+##Add a new column to sirC13Data for atom percent of added glucose
+
+```{r}
+# Add a new column to the data frame
+sirC13Data <- sirC13Data %>%
+  mutate(Atom_Percent_Glucose_Addition = 3)
+```
+
+##Calculate Average soil only atom percent 13 from days 1-32 of incubation
+
+```{r}
+
+#Calculate daily soil only average CO2_atom_percent_13C
+daily_soil_only <- C13Data %>% 
+  filter(Treatment == "Soil Only",
+         Day != 34) %>% 
+  group_by(Day) %>% 
+  summarise(n = n(), daily_soil_only_mean_CO2_atom_percent_13C = mean(CO2_atom_percent_13C),
+            stdev = sd(CO2_atom_percent_13C))
+
+#Calculate soil only average delta 13C CO2 from whole experiment days 1-30
+all_soil_only <- C13Data %>% 
+  filter(Treatment == "Soil Only",
+         Day != 34) %>% 
+  summarise(soil_only_mean_CO2_atom_percent_13C = mean(CO2_atom_percent_13C))
+
+# Merge all soil only average atom percent into sirC13Data
+sirC13Data <- sirC13Data %>%
+  mutate(soil_only_mean_CO2_atom_percent_13C = all_soil_only$soil_only_mean_CO2_atom_percent_13C)
+
+```
+
+##Calcuate Proportion Substrate Respired for sirC13Data
+
+```{r}
+
+sirC13Data <- sirC13Data %>% 
+mutate(prop_substrate_respired = ((CO2_atom_percent_13C - soil_only_mean_CO2_atom_percent_13C)/(Atom_Percent_Glucose_Addition - soil_only_mean_CO2_atom_percent_13C)))
+
+#create a new column called final_proportion_substrate_respired where if the value of prop_substrate_respired is < 0, the final_prop_substrate_respired becomes 0, or if the value of prop_13C_respired is > 1, the final_prop_13C_respired becomes 1, and if neither it just stays the same as prop_substrate_respired
+sirC13Data <- sirC13Data %>%
+  mutate(final_proportion_substrate_respired = case_when(
+    is.na(prop_substrate_respired) ~ 0,  # If prop_13C_respired is NA, set final_prop_13C_respired to 0, this is the case for soil only
+    prop_substrate_respired < 0 ~ 0,
+    prop_substrate_respired > 1 ~ 1,
+    TRUE ~ prop_substrate_respired
+  ))
+
+```
+
+##Read in the CO2 data for SIR day 34
+
+```{r}
+sirData_CO2_C <- read.csv(file = paste0 (output_folder, "SIR_CO2_C.csv"))
+
+# Convert variables to appropriate types
+sirData_CO2_C$Jar <- as.factor(sirData_CO2_C$Jar)
+sirData_CO2_C$Rep <- as.factor(sirData_CO2_C$Rep)
+#allData$Day <- as.factor(allData$Day)
+sirData_CO2_C$Treatment <- as.factor(sirData_CO2_C$Treatment)
+sirData_CO2_C$Case <- as.factor(sirData_CO2_C$Case)
+sirData_CO2_C$Day <- as.numeric(sirData_CO2_C$Day)
+str(sirData_CO2_C)
+
+```
+
+## Add CO2 data for SIR day 34 to sirC13Data
+
+```{r}
+sirC13Data <- sirC13Data %>% 
+  left_join(sirData_CO2_C, by = c("Treatment", "Day", "Rep", "Case", "Jar"), suffix = c("",""))%>%
+  select(Jar, Case, Day, Rep, Treatment,CO2_atom_percent_13C, Atom_Percent_Glucose_Addition,soil_only_mean_CO2_atom_percent_13C,prop_substrate_respired,final_proportion_substrate_respired, ugCO2_C_per_gdried_soil)
+```
+
+##Add set up details dried_soil_g to sirC13Data
+
+```{r}
+sirC13Data <- sirC13Data %>% left_join(SetupDetails, by = "Jar", suffix = c("", "")) %>%
+  select(Jar, Case, Day, Rep, Treatment,CO2_atom_percent_13C, Atom_Percent_Glucose_Addition,soil_only_mean_CO2_atom_percent_13C,prop_substrate_respired,final_proportion_substrate_respired, ugCO2_C_per_gdried_soil, dried_soil_g)
+```
+
+##Add a column to sirC13Data called substrate_C_added_ug
+
+```{r}
+# Add a new column to the data frame. This code checks if the value of Jars is in the range 1 to 9. If it is, substrate_C_added_ug will be set to 48000; otherwise, it will be set to 4800. Jars 1-9 had 10X the normal amount of glucose solution added
+sirC13Data <- sirC13Data %>%
+  mutate(substrate_C_added_ug = ifelse(Jar %in% 1:9, 48000, 4800))
+
+
+```
+
+## Calculate substrate respired (ugCO2-C /g dried soil) and soil respired (ugCO2-C /g dried soil)
+
+```{r}
+sirC13Data <- sirC13Data %>% 
+  mutate(respired_substrate_ugCO2_C_per_gdried_soil = prop_substrate_respired * ugCO2_C_per_gdried_soil,
+         soil_respired_ugCO2_C_per_gdried_soil = ugCO2_C_per_gdried_soil - respired_substrate_ugCO2_C_per_gdried_soil)
+```
+
+##Calculate C rates added (ugC/g dried soil) and 13C respired % then cumulative percent 13C repsired
+
+```{r}
+
+sirC13Data <- sirC13Data %>% 
+  mutate(ug_C_per_g_dried_soil = substrate_C_added_ug / dried_soil_g,
+         percent_substrate_respired = (respired_substrate_ugCO2_C_per_gdried_soil / ug_C_per_g_dried_soil )*100)
+
+#Save this as CSV
+
+write.csv(sirC13Data, paste0(output_folder, "SIR_13CO2_partitioning.csv"))
+```
+
+##Plot Substrate Induced Respiration Data
+
+```{r}
+p <- ggplot(sirC13Data, aes(x = Case, y = percent_substrate_respired,fill = Treatment))+
+  geom_col()+
+  labs(title = "Post Incubation Substrate Induced Respiration",
+       x = "Treatment/Rep",
+       y = "Percent Substrate Respired") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())+
+  theme(
+    plot.title = element_text(size = 20),     # Title font size
+    axis.title.x = element_text(size = 15),   # X axis label font size
+    axis.title.y = element_text(size = 15)    # Y axis label font size
+  )
+  
+p
+
+#Save the plot in output folder
+ggsave( file = paste0 (output_folder, "SIR_13CO2.pdf"), p)
+```
+
+##Create a Summary of SIR
+
+```{r}
+# Create a summary of the cumulative CO2 C data 
+sirC13DataSummary <- sirC13Data %>%
+  group_by(Treatment) %>%
+  summarise(n = n(),
+    avg_percent_substrate_respired = mean(percent_substrate_respired),
+            stdDev = sd(percent_substrate_respired))
+```
+
+
+
+##Create the summary bar plot with error bars
+
+```{r}
+p<- ggplot(sirC13DataSummary, aes(x = Treatment, y = avg_percent_substrate_respired, fill = Treatment)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = avg_percent_substrate_respired - stdDev, 
+                    ymax = avg_percent_substrate_respired + stdDev), 
+                width = 0.2) +
+  labs(title = "Summary Post Incubation\nSubstrate Induced Respiration",
+       x = "Treatment",
+       y = "Average Percent Substrate Respired") +
+  theme_minimal()+
+  theme(axis.text.x = element_blank())
+
+p
+
+#Save the plot in output folder
+ggsave( file = paste0 (output_folder, "summarySIR_13CO2_1.pdf"), p)
+```
+
+##Create a summary box plot of SIR
+
+```{r}
+p <- ggplot(sirC13Data, aes(x = Treatment, y = percent_substrate_respired,fill = Treatment))+
+  geom_boxplot()+
+  labs(title = "Summary Post Incubation\nSubstrate Induced Respiration",
+       x = "Treatment",
+       y = "Percent Substrate Respired") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())
+  
+p
+
+#Save the plot in output folder
+ggsave( file = paste0 (output_folder, "summarySIR_13CO2_2.pdf"), p)
+```
+
+
+## Perform One-way ANOVA analysis on SIR data
+
+```{r}
+
+#Reorder the Treatments so that Soil Only is first
+sirC13Data <- sirC13Data %>%
+mutate(Treatment = fct_relevel(Treatment, "Soil Only")) 
+str(sirC13Data)
+
+#One way anova using lm
+OneWayFit <- lm(percent_substrate_respired ~ Treatment, data = sirC13Data)
+
+#Compare all the treatments to control (Soil Only)
+emmeans_results <- emmeans(OneWayFit, dunnett ~ Treatment)
+
+emmeans_results
+
+# Capture the output of emmeans()
+emmeans_output <- capture.output(summary(emmeans_results))
+
+# Write the captured output to a text file
+writeLines(emmeans_output, con = paste0(output_folder, "SIR_13CO2_aov_emmeans.txt"))
+```
+
+
+
+
