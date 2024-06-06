@@ -218,10 +218,15 @@ write.csv(summary_C13Data_filtered, paste0(output_folder, "summary_13CO2_partiti
 # plot cumulative_percent_13C_respired
 
 p <- ggplot(C13Data_filtered, aes(x = Day, y = cumulative_percent_substrate_respired, color = Treatment)) +
-  geom_jitter(width = 0.2, alpha = 0.5, size = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.7, size = 1.5) +
   #geom_errorbar(aes(ymin = cumulative_ugCO2_C_gdried_soil - cumulative_stdDev, ymax = cumulative_ugCO2_C_gdried_soil + cumulative_stdDev), width = 0.2) +
-  labs(x = "Days", y = "Percent", title = "Cumulative Percent\nSubstrate Respired") +
-  theme_minimal()
+  labs(x = "Days", y = "Percent", title = "Cumulative Percent Substrate Respired") +
+  theme_minimal()+
+  theme(
+    plot.title = element_text(size = 20),     # Title font size
+    axis.title.x = element_text(size = 15),   # X axis label font size
+    axis.title.y = element_text(size = 15)    # Y axis label font size
+  )
 
 
 p
@@ -407,7 +412,12 @@ p <- ggplot(sirC13Data, aes(x = Case, y = percent_substrate_respired,fill = Trea
        x = "Treatment/Rep",
        y = "Percent Substrate Respired") +
   theme_minimal() +
-  theme(axis.text.x = element_blank())
+  theme(axis.text.x = element_blank())+
+  theme(
+    plot.title = element_text(size = 20),     # Title font size
+    axis.title.x = element_text(size = 15),   # X axis label font size
+    axis.title.y = element_text(size = 15)    # Y axis label font size
+  )
   
 p
 

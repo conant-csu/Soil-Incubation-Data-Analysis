@@ -132,11 +132,16 @@ cumulativeDataForModel <- cumulativeData %>%
 
 ```{r}
 #Plot
-p<- ggplot(cumulativeData, aes(x = Day, y = cumulative_ugCO2_C_per_gdried_soil, color = Treatment)) +
-  geom_jitter(alpha = 0.4, size = 0.7) +
+p<- ggplot(cumulativeData, aes(x = Day, y = cumulative_ugCO2_C_per_gdried_soil, color = Treatment, shape = Rep)) +
+  geom_jitter(alpha = 0.7, size = 1.7, width = 0.4) +
   #geom_errorbar(aes(ymin = avg_cum_ugCO2_C_per_gdried_soil - cumulative_stdDev, ymax = avg_cum_ugCO2_C_per_gdried_soil + cumulative_stdDev), width = 0.2) +
-  labs(x = "Days", y = "ug CO2 C per g soil", title = "Cumulative ug CO2 C\nper g soil") +
-  theme_minimal()
+  labs(x = "Days", y = "ug CO2 C per g soil", title = "Cumulative ug CO2 C per g soil") +
+  theme_minimal()+
+  theme(
+    plot.title = element_text(size = 20),     # Title font size
+    axis.title.x = element_text(size = 15),   # X axis label font size
+    axis.title.y = element_text(size = 15)    # Y axis label font size
+  )
 
 p
 
@@ -350,8 +355,12 @@ p <- ggplot(sirData, aes(x = Jar, y = ugCO2_C_per_gdried_soil,fill = Treatment))
   labs(title = "Post Incubation Substrate Induced Respiration",
        x = "Jar",
        y = "ug CO2 C per g dried soil") +
-  theme_minimal()#+
-  #theme(axis.text.x = element_blank())
+  theme_minimal()+
+  theme(
+    plot.title = element_text(size = 20),     # Title font size
+    axis.title.x = element_text(size = 15),   # X axis label font size
+    axis.title.y = element_text(size = 15)    # Y axis label font size
+  )
   
 p
 
